@@ -1,14 +1,15 @@
 from typing import List
-from PyQt5.QtCore import Qt, QRectF, pyqtSignal
+from PyQt5.QtCore import Qt, QRectF, pyqtSignal, QPropertyAnimation, QEasingCurve
 from PyQt5.QtGui import QPainter, QColor, QLinearGradient, QBrush
 from PyQt5.QtWidgets import (
     QWidget, QVBoxLayout, QHBoxLayout, QLabel, QFrame
 )
 from qfluentwidgets import (
-    CardWidget, StrongBodyLabel, BodyLabel, CaptionLabel
+    CardWidget, StrongBodyLabel, BodyLabel, CaptionLabel, SmoothScrollArea
 )
-from ..core.models import DailyItem
+from ..core.models import DailyItem, HourlyItem
 from ..core.icons import render_weather_pixmap
+from .hourly_view import HourlyItemWidget
 
 class TempRangeBar(QWidget):
     """Custom bar widget visualizing min-to-max temperature range relative to the weekly span."""
@@ -65,57 +66,88 @@ class TempRangeBar(QWidget):
 
 
 class DailyRowWidget(QWidget):
-    """Single row for one day in the 10-day forecast."""
-    clicked = pyqtSignal(int) # Emits index of the day
+    """Single row for one day in the 10-day forecast with inline expandable 24-hour view."""
+    toggled = pyqtSignal() # Emits when expanded state changes
 
     def __init__(self, index: int, parent=None):
         super().__init__(parent)
         self.index = index
-        self.setFixedHeight(44)
-        # Enable cursor change on hover
-        self.setCursor(Qt.PointingHandCursor)
+        self.is_expanded = False
         
-        layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 4, 12, 4)
-        layout.setSpacing(12)
+        self.main_layout = QVBoxLayout(self)
+        self.main_layout.setContentsMargins(0, 0, 0, 0)
+        self.main_layout.setSpacing(0)
+        
+        # --- 1. Top row (Always visible) ---
+        self.row_widget = QWidget(self)
+        self.row_widget.setFixedHeight(44)
+        self.row_widget.setCursor(Qt.PointingHandCursor)
+        
+        row_layout = QHBoxLayout(self.row_widget)
+        row_layout.setContentsMargins(12, 4, 12, 4)
+        row_layout.setSpacing(12)
 
-        # 1. Day / Date
-        self.lbl_day = StrongBodyLabel("今天", self)
+        self.lbl_day = StrongBodyLabel("今天", self.row_widget)
         self.lbl_day.setFixedWidth(75)
-        layout.addWidget(self.lbl_day)
+        row_layout.addWidget(self.lbl_day)
 
-        # 2. Icon + Condition
-        self.lbl_icon = QLabel(self)
+        self.lbl_icon = QLabel(self.row_widget)
         self.lbl_icon.setFixedSize(30, 30)
-        layout.addWidget(self.lbl_icon)
+        row_layout.addWidget(self.lbl_icon)
 
-        self.lbl_condition = BodyLabel("晴朗", self)
+        self.lbl_condition = BodyLabel("晴朗", self.row_widget)
         self.lbl_condition.setFixedWidth(100)
-        layout.addWidget(self.lbl_condition)
+        row_layout.addWidget(self.lbl_condition)
 
-        # 3. Rain Probability
-        self.lbl_rain = CaptionLabel("", self)
+        self.lbl_rain = CaptionLabel("", self.row_widget)
         self.lbl_rain.setFixedWidth(55)
         self.lbl_rain.setStyleSheet("color: #3B82F6; font-weight: 500;")
-        layout.addWidget(self.lbl_rain)
+        row_layout.addWidget(self.lbl_rain)
 
-        # 4. Min Temp Label
-        self.lbl_min = CaptionLabel("15°", self)
+        self.lbl_min = CaptionLabel("15°", self.row_widget)
         self.lbl_min.setFixedWidth(30)
         self.lbl_min.setAlignment(Qt.AlignRight | Qt.AlignVCenter)
-        layout.addWidget(self.lbl_min)
+        row_layout.addWidget(self.lbl_min)
 
-        # 5. Temperature Range Visual Bar
-        self.temp_bar = TempRangeBar(self)
-        layout.addWidget(self.temp_bar, 1)
+        self.temp_bar = TempRangeBar(self.row_widget)
+        row_layout.addWidget(self.temp_bar, 1)
 
-        # 6. Max Temp Label
-        self.lbl_max = StrongBodyLabel("25°", self)
+        self.lbl_max = StrongBodyLabel("25°", self.row_widget)
         self.lbl_max.setFixedWidth(30)
         self.lbl_max.setAlignment(Qt.AlignLeft | Qt.AlignVCenter)
-        layout.addWidget(self.lbl_max)
+        row_layout.addWidget(self.lbl_max)
+        
+        self.main_layout.addWidget(self.row_widget)
+        
+        # --- 2. Expandable Hourly Area (Hidden by default) ---
+        self.expand_widget = QWidget(self)
+        self.expand_widget.setFixedHeight(0) # Initially collapsed
+        self.expand_widget.setStyleSheet("background: transparent;")
+        
+        expand_layout = QVBoxLayout(self.expand_widget)
+        expand_layout.setContentsMargins(0, 10, 0, 10)
+        
+        self.scroll = SmoothScrollArea(self.expand_widget)
+        self.scroll.setFixedHeight(140)
+        self.scroll.setWidgetResizable(True)
+        self.scroll.setVerticalScrollBarPolicy(Qt.ScrollBarAlwaysOff)
+        self.scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarAsNeeded)
+        self.scroll.setFrameShape(QFrame.NoFrame)
+        self.scroll.setStyleSheet("background: transparent;")
 
-    def set_data(self, item: DailyItem, week_min: float, week_max: float):
+        self.hourly_content = QWidget()
+        self.hourly_content.setStyleSheet("background: transparent;")
+        self.h_layout = QHBoxLayout(self.hourly_content)
+        self.h_layout.setContentsMargins(12, 0, 12, 0)
+        self.h_layout.setSpacing(8)
+        self.h_layout.setAlignment(Qt.AlignLeft)
+
+        self.scroll.setWidget(self.hourly_content)
+        expand_layout.addWidget(self.scroll)
+        
+        self.main_layout.addWidget(self.expand_widget)
+
+    def set_data(self, item: DailyItem, week_min: float, week_max: float, hourly_slice: List[HourlyItem] = None):
         self.lbl_day.setText(f"{item.weekday}")
         self.lbl_condition.setText(item.condition_text)
         
@@ -132,16 +164,44 @@ class DailyRowWidget(QWidget):
 
         self.temp_bar.set_range(item.temp_min, item.temp_max, week_min, week_max)
         
+        # Populate hourly data if provided
+        while self.h_layout.count():
+            w_item = self.h_layout.takeAt(0)
+            if w_item.widget():
+                w_item.widget().deleteLater()
+                
+        if hourly_slice:
+            for h in hourly_slice:
+                w = HourlyItemWidget(self.hourly_content)
+                w.set_data(h)
+                self.h_layout.addWidget(w)
+        
     def mousePressEvent(self, event):
         super().mousePressEvent(event)
         if event.button() == Qt.LeftButton:
-            self.clicked.emit(self.index)
+            # We must determine if click was inside the row_widget, not the scroll area
+            if self.row_widget.geometry().contains(event.pos()):
+                self._toggle_expand()
+
+    def _toggle_expand(self):
+        self.is_expanded = not self.is_expanded
+        
+        # Simple height animation
+        target_h = 160 if self.is_expanded else 0
+        
+        self.anim = QPropertyAnimation(self.expand_widget, b"maximumHeight", self)
+        self.anim.setDuration(300)
+        self.anim.setEasingCurve(QEasingCurve.OutCubic)
+        self.anim.setStartValue(self.expand_widget.height())
+        self.anim.setEndValue(target_h)
+        self.anim.start()
+        
+        self.toggled.emit()
 
 
 class DailyView(CardWidget):
-    """Card containing 10-day forecast."""
-    day_clicked = pyqtSignal(int)
-
+    """Card containing 10-day forecast with inline expandable hours."""
+    
     def __init__(self, parent=None):
         super().__init__(parent)
         self.init_ui()
@@ -151,20 +211,19 @@ class DailyView(CardWidget):
         self.layout_root.setContentsMargins(20, 16, 20, 16)
         self.layout_root.setSpacing(6)
 
-        self.lbl_title = StrongBodyLabel("未来 7 天天气预报", self)
+        self.lbl_title = StrongBodyLabel("未来 10 天天气预报 (点击展开24小时详情)", self)
         self.layout_root.addWidget(self.lbl_title)
 
         self.rows_container = QVBoxLayout()
         self.rows_container.setSpacing(2)
         self.layout_root.addLayout(self.rows_container)
 
-    def update_data(self, daily_items: List[DailyItem]):
+    def update_data(self, daily_items: List[DailyItem], hourly_items: List['HourlyItem'] = None):
         # Clear existing rows
         while self.rows_container.count():
             item = self.rows_container.takeAt(0)
-            widget = item.widget()
-            if widget:
-                widget.deleteLater()
+            if item.widget():
+                item.widget().deleteLater()
 
         if not daily_items:
             return
@@ -174,6 +233,29 @@ class DailyView(CardWidget):
 
         for i, item in enumerate(daily_items):
             row = DailyRowWidget(i, self)
-            row.set_data(item, week_min, week_max)
-            row.clicked.connect(self.day_clicked.emit)
+            
+            # Extract 24-hour slice for this specific day
+            h_slice = None
+            if hourly_items:
+                start_idx = i * 24
+                end_idx = start_idx + 24
+                h_slice = hourly_items[start_idx:end_idx]
+                
+            row.set_data(item, week_min, week_max, h_slice)
+            
+            # When toggled, we can optionally collapse others (accordion style)
+            row.toggled.connect(lambda i=i: self._on_row_toggled(i))
+            
             self.rows_container.addWidget(row)
+            
+    def _on_row_toggled(self, expanded_index: int):
+        # Optional: Collapse other rows
+        for i in range(self.rows_container.count()):
+            if i == expanded_index:
+                continue
+            item = self.rows_container.itemAt(i)
+            if item and item.widget():
+                row = item.widget()
+                if row.is_expanded:
+                    row.is_expanded = False
+                    row.expand_widget.setMaximumHeight(0)

@@ -170,31 +170,8 @@ class WeatherInterface(QWidget):
         # We can find start_idx by looking for "现在" or just use the first item if not found
         start_idx = next((i for i, h in enumerate(data.hourly) if h.time_str == "现在"), 0)
         self.card_hourly.update_data(data.hourly[start_idx:start_idx + 24])
-        self.card_daily.update_data(data.daily)
+        self.card_daily.update_data(data.daily, data.hourly)
         self.grid_metrics.update_data(data.current, data.daily, data.air_quality, settings.unit)
-
-        # Reconnect daily signal safely
-        try:
-            self.card_daily.day_clicked.disconnect()
-        except TypeError:
-            pass
-        self.card_daily.day_clicked.connect(self._on_day_clicked)
-
-    def _on_day_clicked(self, index: int):
-        if not self.current_data or not self.current_data.hourly:
-            return
-        
-        # Open-Meteo hourly data usually has 24 hours per day starting at midnight
-        start_idx = index * 24
-        end_idx = start_idx + 24
-        
-        # If it's today (index 0), we could show from current time or midnight. 
-        # The user requested "当天的详细24小时预报", so midnight to 23:00 is fine.
-        hourly_slice = self.current_data.hourly[start_idx:end_idx]
-        self.card_hourly.update_data(hourly_slice)
-        
-        # Optionally, reset scroll position
-        self.card_hourly.scroll.horizontalScrollBar().setValue(0)
 
 
     def _on_fetch_failed(self, error_msg: str):

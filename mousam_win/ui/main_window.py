@@ -110,14 +110,50 @@ class MainWindow(FluentWindow):
         
         menu = RoundMenu(parent=self)
         
+        # Determine the index of the current city
+        saved = settings.saved_cities
+        idx = next((i for i, c in enumerate(saved) if c.name == loc.name), -1)
+        
+        if idx > 0:
+            action_up = Action(FluentIcon.UP, '上移', self)
+            action_up.triggered.connect(lambda: self._move_city(idx, -1))
+            menu.addAction(action_up)
+            
+        if idx >= 0 and idx < len(saved) - 1:
+            action_down = Action(FluentIcon.DOWN, '下移', self)
+            action_down.triggered.connect(lambda: self._move_city(idx, 1))
+            menu.addAction(action_down)
+            
+        if idx >= 0 and len(saved) > 1:
+            menu.addSeparator()
+
         action_delete = Action(FluentIcon.DELETE, '删除此城市', self)
         action_delete.triggered.connect(lambda: self._delete_city_from_sidebar(loc))
-        
         menu.addAction(action_delete)
         
         # Determine global position
         global_pos = nav_item.mapToGlobal(pos)
         menu.exec_(global_pos)
+
+    def _move_city(self, idx: int, direction: int):
+        saved = settings.saved_cities
+        new_idx = idx + direction
+        if 0 <= new_idx < len(saved):
+            # Swap
+            saved[idx], saved[new_idx] = saved[new_idx], saved[idx]
+            # Save manually since we bypassed settings logic
+            settings.data["saved_cities"] = [
+                {
+                    "name": c.name,
+                    "country": c.country,
+                    "state": c.state,
+                    "latitude": c.latitude,
+                    "longitude": c.longitude,
+                    "timezone": c.timezone,
+                } for c in saved
+            ]
+            settings.save()
+            self._build_city_tabs()
 
     def _delete_city_from_sidebar(self, loc: Location):
         saved = settings.saved_cities
